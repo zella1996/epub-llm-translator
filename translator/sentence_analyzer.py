@@ -59,14 +59,14 @@ def overall_difficulty(sentence: str) -> float:
     hard_ratio = hard_word_ratio(sentence)
     readability = readability_score(sentence)
 
-    print(
-        f"归一化前\n"
-        f"length: {complexity['length']}\n"
-        f"depth: {complexity['depth']}\n"
-        f"sub_clauses: {complexity['sub_clauses']}\n"
-        f"hard_ratio: {hard_ratio:.2f}\n"
-        f"readability: {readability:.2f}\n"
-    )
+    # print(
+    #     f"归一化前特征值：\n"
+    #     f"length: {complexity['length']}\n"
+    #     f"depth: {complexity['depth']}\n"
+    #     f"sub_clauses: {complexity['sub_clauses']}\n"
+    #     f"hard_ratio: {hard_ratio:.2f}\n"
+    #     f"readability: {readability:.2f}\n"
+    # )
     # 根据实际语料调整最大最小值
     length_norm = normalize(complexity["length"], 5, 80)  
     depth_norm = normalize(complexity["depth"], 1, 16)
@@ -74,14 +74,14 @@ def overall_difficulty(sentence: str) -> float:
     hard_ratio_norm = normalize(hard_ratio, 0, 1)
     readability_norm = normalize(readability, 0, 100)
 
-    print(
-        f"归一化后特征值：\n"
-        f"句长归一化: {length_norm:.2f}（权重0.2）\n"
-        f"句法深度归一化: {depth_norm:.2f}（权重0.3）\n"
-        f"从句数归一化: {sub_clause_norm:.2f}（权重0.4）\n"
-        f"生僻词比例归一化: {hard_ratio_norm:.2f}（权重0.1）\n"
-        f"易读性归一化: {readability_norm:.2f}（权重-0.1）\n"
-    )
+    # print(
+    #     f"归一化后特征值：\n"
+    #     f"句长归一化: {length_norm:.2f}（权重0.2）\n"
+    #     f"句法深度归一化: {depth_norm:.2f}（权重0.3）\n"
+    #     f"从句数归一化: {sub_clause_norm:.2f}（权重0.4）\n"
+    #     f"生僻词比例归一化: {hard_ratio_norm:.2f}（权重0.1）\n"
+    #     f"易读性归一化: {readability_norm:.2f}（权重-0.1）\n"
+    # )
     score = (
         length_norm * 0.2
         + depth_norm * 0.3
