@@ -1,21 +1,13 @@
-import logging
-from math import log
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
 from pathlib import Path
+from translator.llm_api import translate
+from logs.logger import logger
 
-# 初始化logger，输出到logs文件夹
-logs_dir = Path(__file__).parent.parent / "logs"
-logs_dir.mkdir(parents=True, exist_ok=True)
-log_file = logs_dir / "translate.log"
 
-logger = logging.getLogger("translate_logger")
-logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler(log_file, encoding="utf-8")
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-file_handler.setFormatter(formatter)
-if not logger.hasHandlers():
-    logger.addHandler(file_handler)
+
+# 常量定义
+P_TAG = "p"
 
 
 def translate_epub_main(epub_path):
@@ -35,11 +27,43 @@ def translate_epub_main(epub_path):
     for item in book.get_items():
         if item.get_type() == ITEM_DOCUMENT:
             content = item.get_content()
-            soup = BeautifulSoup(content, "html.parser")
-            p_tags = soup.find_all("p")
+            soup_tr = BeautifulSoup(content, "html.parser")
+            p_tags = soup_tr.find_all(P_TAG)
             for p in p_tags:
                 text = p.get_text()
                 if text:
-                    logger.info(f"正文内容: {text}")
+                    logger.debug(f"正文内容: {text[:50]}")
+                    logger.info(f"解析结果: \n{translate(text)}\n")
+
                 else:
-                    logger.info(f"！正文内容: {text}")
+                    logger.debug(f"！正文内容: {text}")
+
+    def add_translated_result_page(id, content):
+        def append_content(soup_tr, id, a_content):
+            paragraph = soup_tr.new_tag(P_TAG)
+            a_tag = soup_tr.new_tag("a", id=id)
+            a_tag.string = a_content
+            paragraph.append(a_tag)
+            soup_tr.append(paragraph)
+
+        if not hasattr(add_translated_result_page, "translated_result"):
+            # 第一次调用，创建页面
+            translated_result = epub.EpubHtml(
+                title="译文参考", file_name="译文参考.xhtml", lang="zh"
+            )
+            soup_tr = BeautifulSoup(features="html.parser")
+            h1_tag = soup_tr.new_tag("h1")
+            h1_tag.string = "译文参考"
+            soup_tr.append(h1_tag)
+            append_content(soup_tr, id, content)
+            translated_result.content = str(soup_tr)
+            book.add_item(translated_result)
+            book.spine.append(translated_result)
+
+            add_translated_result_page.translated_result = translated_result
+            add_translated_result_page.soup_tr = soup_tr
+        else:
+            # 后续调用，追加内容
+            soup_tr = add_translated_result_page.soup_tr
+            append_content(soup_tr, id, content)
+            add_translated_result_page.translated_result.content = str(soup_tr)
