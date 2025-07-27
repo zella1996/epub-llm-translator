@@ -1,118 +1,127 @@
-from ebooklib import epub, ITEM_DOCUMENT
-from bs4 import BeautifulSoup
 from pathlib import Path
-from translator.llm_api import explain_sentence
+from typing import List, Tuple
 from logs.logger import logger
-from translator.sentence_analyzer import overall_difficulty, nlp
-from bs4 import NavigableString
+from translator.epub_processor import EpubContent
+from translator.llm_api import explain_sentence
+from translator.sentence_analyzer import nlp, overall_difficulty
+from lxml.etree import Element
 
 # 常量定义
-P_TAG = "p"  # 只处理<p>标签
-FOOTNOTE_START_ID = 1  # 脚注编号起始值
-DIFFICULTY_THRESHOLD = 45  # 难度评分阈值
-FOOTNOTE_FILE_NAME = "译文参考.html"
+P_TAG = "p"
+FOOTNOTE_START_ID = 1
+DIFFICULTY_THRESHOLD = 45
+FOOTNOTE_FILE_NAME = "译文参考.xhtml"
 FOOTNOTE_TITLE = "译文参考"
-FOOTNOTE_LANG = "zh"
-FOOTNOTE_ANCHOR_TEMPLATE = '<a href="译文参考.html#llmnote-{id}" class="nounder">#</a>'
 FOOTNOTE_ID_TEMPLATE = "llmnote-{id}"
-HTML_PARSER = "html.parser"
-ENCODING = "utf-8"
+FOOTNOTE_ANCHOR_HREF_TEMPLATE = "译文参考.xhtml#llmnote-{id}"
+FOOTNOTE_ANCHOR_CLASS = "nounder"
+SENTENCE_END_PUNCT = {".", "!", "?", "。", "！", "？"}
 
 
-def translate_epub_main(epub_path, output_path):
+def process_sentence(
+    text: str, footnote_id: int, footnote_map: List[Tuple[int, str]]
+) -> Tuple[str, List[Element], int]:
     """
-    翻译主方法，解析epub文件，仅获取<p>标签的正文内容，并打印在日志中
-    编辑后的epub另存为output_path
+    处理单个句子，返回（句子文本, [要插入的Element节点], 下一个footnote_id）。
+    """
+    elements = []
+
+    # 句子基本筛选
+    if len(text) < 5 or text[-1] not in SENTENCE_END_PUNCT:
+        logger.debug(f"跳过非句子: {text}")
+        return text, elements, footnote_id
+
+    if len([w for w in text.split() if w.isalpha()]) <= 3:
+        logger.debug(f"跳过短句: {text}")
+        return text, elements, footnote_id
+
+    if all((c in SENTENCE_END_PUNCT or c.isspace()) for c in text):
+        logger.debug(f"跳过重复标点: {text}")
+        return text, elements, footnote_id
+
+    # 难度评分
+    score = overall_difficulty(text)
+    logger.info(f"难度评分: {score:.2f} - 句子: {text}\n")
+
+    # 需要添加注脚的句子
+    if score > DIFFICULTY_THRESHOLD:
+        # result = explain_sentence(text)
+        result = "test" + str(footnote_id)
+        logger.info(f"解释结果: {result}")
+        a = Element(
+            "a",
+            href=FOOTNOTE_ANCHOR_HREF_TEMPLATE.format(id=footnote_id),
+            **{"class": FOOTNOTE_ANCHOR_CLASS},
+        )
+        a.text = "# "
+        elements.append(a)
+        footnote_map.append((footnote_id, result))
+        footnote_id += 1
+
+    return text, elements, footnote_id
+
+
+def process_paragraph(p, footnote_id: int, footnote_map: List[Tuple[int, str]]) -> int:
+    """
+    处理单个<p>节点，按句子插入注脚标签，返回更新后的footnote_id
+    """
+    if not p.text:
+        return footnote_id
+
+    doc = nlp(p.text)
+    first = True
+    last_elem = p
+    p.text = None  # 清空原始文本
+
+    for sent in doc.sents:
+        text = sent.text.strip()
+        sent_text, elements, footnote_id = process_sentence(
+            text, footnote_id, footnote_map
+        )
+        if first:
+            p.text = sent_text
+            last_elem = p
+            first = False
+        else:
+            if last_elem.tail is None:
+                last_elem.tail = sent_text
+            else:
+                last_elem.tail += sent_text
+        for elem in elements:
+            p.append(elem)
+            last_elem = elem
+    # 这里只处理了p.text，若p原本有子节点（如嵌套span），可根据需要扩展
+    return footnote_id
+
+
+def translate_epub_main(epub_path: str, output_path: str) -> None:
+    """
+    基于epub_processor实现的注脚添加主流程，按句子增量插入脚注标签。
     """
     epub_path = Path(epub_path)
     output_path = Path(output_path)
-
-    try:
-        book = epub.read_epub(str(epub_path))
-        logger.info(f"成功打开EPUB文件: {epub_path}")
-    except Exception as e:
-        logger.error(f"无法打开EPUB文件: {epub_path}, 错误: {e}")
-        return
+    epub_book = EpubContent(epub_path)
 
     footnote_id = FOOTNOTE_START_ID
-    footnote_map = []
+    footnote_map: List[Tuple[int, str]] = []  # (id, content)
 
-    for item in book.get_items():
-        if item.get_type() != ITEM_DOCUMENT:
-            continue
-        logger.info(f"当前处理的item名称: {item.get_name()}")
+    # 遍历所有spine文件
+    for spine_path in epub_book.search_spine_paths():
+        html_file = epub_book.read_spine_file(spine_path)
+        root = html_file._root
+        for p in root.iter(P_TAG):
+            footnote_id = process_paragraph(p, footnote_id, footnote_map)
+        epub_book.write_spine_file(spine_path, html_file)
 
-        content = item.get_content()
-        soup_tr = BeautifulSoup(content, HTML_PARSER)
-        p_tags = soup_tr.find_all(P_TAG)
-        for p in p_tags:
-            # 新内容列表
-            new_contents = []
-            for elem in p.contents:
-                if isinstance(elem, (str, NavigableString)):
-                    text = str(elem)
-                    doc = nlp(text)
-                    sentences = [sent.text for sent in doc.sents]
-                    for sent in sentences:
-                        score = overall_difficulty(sent)
-                        logger.info(f"难度评分: {score:.2f} - 句子: {sent}\n")
-                        if score > DIFFICULTY_THRESHOLD:
-                            result = explain_sentence(sent)
-                            logger.info(f"解释结果: {result}")
-                            footnote_anchor = FOOTNOTE_ANCHOR_TEMPLATE.format(
-                                id=footnote_id
-                            )
-                            new_contents.append(sent)
-                            # 直接插入soup对象，避免转义
-                            new_contents.append(
-                                BeautifulSoup(footnote_anchor, HTML_PARSER)
-                            )
-                            footnote_map.append((footnote_id, result))
-                            footnote_id += 1
-                        else:
-                            new_contents.append(sent)
-                else:
-                    # 其他子标签保持不变
-                    new_contents.append(elem)
-            # 替换<p>内容
-            p.clear()
-            for nc in new_contents:
-                if isinstance(nc, str):
-                    p.append(nc)
-                else:
-                    p.append(nc)
-        item.set_content(str(soup_tr).encode(ENCODING))
-
-    if footnote_map:
-        add_explanation_result_page(book, footnote_map)
-
-    epub.write_epub(str(output_path), book)
+    add_explanation_result_chapter(epub_book, footnote_map)
+    epub_book.archive(output_path)
 
 
-def add_explanation_result_page(book, footnote_map):
+def add_explanation_result_chapter(
+    book: EpubContent, footnote_map: List[Tuple[int, str]]
+) -> None:
     """
-    生成译文参考页面，展示所有高难度句子的解释
+    生成译文参考章节，内容为所有注脚解释
     """
-    translated_result = epub.EpubHtml(
-        title=FOOTNOTE_TITLE, file_name=FOOTNOTE_FILE_NAME, lang=FOOTNOTE_LANG
-    )
-    soup = BeautifulSoup(features=HTML_PARSER)
-    h1_tag = soup.new_tag("h1")
-    h1_tag.string = FOOTNOTE_TITLE
-    soup.append(h1_tag)
-    for id, a_content in footnote_map:
-        paragraph = soup.new_tag(P_TAG)
-        a_tag = soup.new_tag(
-            "a", id=FOOTNOTE_ID_TEMPLATE.format(id=id), **{"class": "nounder"}
-        )
-        a_tag.string = f"#{id} {a_content}"
-        paragraph.append(a_tag)
-        soup.append(paragraph)
-    translated_result.content = str(soup)
-    book.add_item(translated_result)
-    book.spine.append(translated_result)
-    # 添加到目录
-    if hasattr(book, "toc") and book.toc:
-        book.toc = list(book.toc) + [translated_result]
-    else:
-        book.toc = [translated_result]
+    new_path = book.add_blank_chapter(FOOTNOTE_FILE_NAME, FOOTNOTE_TITLE)
+    book.write_chapter_body(new_path, footnote_map)

@@ -2,12 +2,29 @@ import os
 import re
 import zipfile
 from pathlib import Path
-from typing import Generator, Callable, Iterable, cast
+from typing import (
+    Generator,
+    Callable,
+    Iterable,
+    Any,
+    Optional,
+    List,
+    Tuple,
+    cast,
+)
 from enum import Enum, auto
 from io import StringIO
 from html import escape
-from lxml.etree import parse, Element, QName, tostring, SubElement
 from lxml import etree
+from lxml.etree import (
+    parse,
+    Element,
+    QName,
+    tostring,
+    SubElement,
+    fromstring,
+)
+from logs.logger import logger
 
 # =========================
 # 文本节点相关工具函数与类型
@@ -156,9 +173,33 @@ def _iter_text(parent: Element):
 # HTMLFile: 单个HTML/XHTML文件处理
 # =========================
 
-_FILE_HEAD_PATTERN = re.compile(r"^<\?xml.*?\?>[\s]*<!DOCTYPE.*?>")
+_FILE_HEAD_PATTERN = re.compile(r"^<\?xml.*?\?>\\s*<!DOCTYPE.*?>", re.DOTALL)
 _XMLNS_IN_TAG = re.compile(r"\{[^}]+\}")
 _BRACES = re.compile(r"(\{|\})")
+
+# HTML 规定了一系列自闭标签，这些标签需要改成非自闭的，因为 EPub 格式不支持
+# https://www.tutorialspoint.com/which-html-tags-are-self-closing
+_EMPTY_TAGS = (
+    "br",
+    "hr",
+    "input",
+    "col",
+    "base",
+    "meta",
+    "area",
+)
+
+_EMPTY_TAG_PATTERN = re.compile(r"<(" + "|".join(_EMPTY_TAGS) + r")(\s[^>]*?)\s*/?>")
+
+
+def to_html(content: str) -> str:
+    return re.sub(_EMPTY_TAG_PATTERN, lambda m: f"<{m.group(1)}{m.group(2)}>", content)
+
+
+def to_xml(content: str) -> str:
+    return re.sub(
+        _EMPTY_TAG_PATTERN, lambda m: f"<{m.group(1)}{m.group(2)} />", content
+    )
 
 
 class HTMLFile:
@@ -166,30 +207,34 @@ class HTMLFile:
     代表一个HTML/XHTML文件，支持文本提取与写回。
     """
 
-    def __init__(self, file_content: str):
-        # 匹配文件头部（xml声明和DOCTYPE）
+    def __init__(self, file_content: str) -> None:
         match = re.match(_FILE_HEAD_PATTERN, file_content)
-        # 依赖to_xml函数将内容转为xml格式，并去除头部
         xml_content = (
             re.sub(_FILE_HEAD_PATTERN, "", to_xml(file_content))
             if to_xml
             else file_content
         )
         self._head: str = match.group() if match else None
-        self._root: Element = Element("root")  # 占位初始化
+        self._root: Element = None
         self._xmlns: str | None = None
         self._texts_length: int | None = None
+        from lxml.etree import fromstring as etree_fromstring
         try:
-            from xml.etree.ElementTree import fromstring
-
-            # 解析xml内容为Element对象
-            self._root = fromstring(xml_content)
-            # 提取并清理命名空间
+            self._root = etree_fromstring(xml_content.encode("utf-8"))
             self._xmlns = self._extract_xmlns(self._root)
-        except Exception:
-            pass
+        except Exception as e1:
+            try:
+                from lxml.html import fromstring as html_fromstring
+                self._root = html_fromstring(file_content.encode("utf-8"))
+                self._xmlns = None
+                logger.warning(f"[HTMLFile] XHTML解析失败，已降级为HTML5解析: {e1}")
+            except Exception as e2:
+                logger.error(
+                    f"[HTMLFile] 解析失败: {e1}\nHTML5降级失败: {e2}\n内容片段: {file_content[:200]}"
+                )
+                raise RuntimeError(f"HTMLFile解析失败: {e1}; HTML5降级失败: {e2}")
 
-    def _extract_xmlns(self, root: Element) -> str | None:
+    def _extract_xmlns(self, root: Element) -> Optional[str]:
         """
         遍历所有元素，提取根命名空间并清理tag中的命名空间
         """
@@ -207,19 +252,19 @@ class HTMLFile:
                 element.tag = re.sub(_XMLNS_IN_TAG, "", element.tag)
         return root_xmlns
 
-    def _all_elements(self, parent: Element):
+    def _all_elements(self, parent: Element) -> Any:
         """递归遍历所有元素"""
         yield parent
         for child in parent:
             yield from self._all_elements(child)
 
-    def read_texts(self) -> list[str]:
+    def read_texts(self) -> List[str]:
         """读取所有文本节点内容"""
         texts = list(read_texts(self._root))
         self._texts_length = len(texts)
         return texts
 
-    def write_texts(self, texts: Iterable[str]):
+    def write_texts(self, texts: Iterable[str]) -> None:
         """写入文本节点内容"""
         append_texts(self._root, texts)
 
@@ -269,25 +314,20 @@ class EpubContent:
     代表一个EPUB文件，支持解包、文本提取、写回、元数据操作等。
     """
 
-    def __init__(self, epub_path: Path, temp_dir: Path = None):
-        # 初始化epub文件路径和解压目录
+    def __init__(self, epub_path: Path, temp_dir: Optional[Path] = None) -> None:
         self.file_path = epub_path
         self.extract_dir = (
             str(epub_path) + "_extracted" if temp_dir is None else str(temp_dir)
         )
         if not os.path.exists(self.extract_dir):
             os.makedirs(self.extract_dir)
-        # 解压epub文件到指定目录
+        logger.info(f"EPUB解包完成，目录: {self.extract_dir}")
         with zipfile.ZipFile(self.file_path, "r") as zip_ref:
             zip_ref.extractall(self.extract_dir)
         self._temp_dir: Path = Path(self.extract_dir)
-        # 查找主内容opf文件路径
         self._content_path = self._find_content_path(self.extract_dir)
-        # 解析opf文件
         self._tree = parse(self._content_path)
-        # 获取命名空间
         self._namespaces = {"ns": self._tree.getroot().nsmap.get(None)}
-        # 获取spine、metadata、manifest节点
         self._spine = self._tree.xpath("//ns:spine", namespaces=self._namespaces)[0]
         self._metadata = self._tree.xpath("//ns:metadata", namespaces=self._namespaces)[
             0
@@ -309,7 +349,7 @@ class EpubContent:
         joined_path = os.path.join(path, full_path)
         return os.path.abspath(joined_path)
 
-    def archive(self, saved_path: Path):
+    def archive(self, saved_path: Path) -> None:
         """
         将解压目录重新打包为epub文件
         """
@@ -324,7 +364,7 @@ class EpubContent:
                 )
 
     @property
-    def ncx_path(self):
+    def ncx_path(self) -> Optional[str]:
         """
         获取ncx导航文件路径
         """
@@ -342,7 +382,7 @@ class EpubContent:
             return path
 
     @property
-    def spines(self) -> list:
+    def spines(self) -> List[dict]:
         """
         获取spine顺序的内容项信息
         """
@@ -396,14 +436,14 @@ class EpubContent:
         with open(spine_path, "r", encoding="utf-8") as file:
             return HTMLFile(file.read())
 
-    def write_spine_file(self, spine_path: Path, file: HTMLFile):
+    def write_spine_file(self, spine_path: Path, file: HTMLFile) -> None:
         """
         写入spine文件内容
         """
         with open(spine_path, "w", encoding="utf-8") as f:
             f.write(file.file_content)
 
-    def replace_ncx(self, replace: Callable[[list[str]], list[str]]):
+    def replace_ncx(self, replace: Callable[[List[str]], List[str]]) -> None:
         """
         替换ncx文件中的text节点内容
         """
@@ -434,14 +474,14 @@ class EpubContent:
         else:
             return f"{origin} - {target}"
 
-    def save_content(self):
+    def save_content(self) -> None:
         """
         保存opf主内容文件
         """
         self._tree.write(self._content_path, pretty_print=True)
 
     @property
-    def title(self):
+    def title(self) -> Optional[str]:
         """
         获取书名
         """
@@ -451,7 +491,7 @@ class EpubContent:
         return title_dom.text
 
     @title.setter
-    def title(self, title: str):
+    def title(self, title: str) -> None:
         """
         设置书名
         """
@@ -459,7 +499,7 @@ class EpubContent:
         if title_dom is not None:
             title_dom.text = _escape_ascii(title)
 
-    def _get_title(self):
+    def _get_title(self) -> Optional[Element]:
         """
         获取metadata中的title节点
         """
@@ -474,14 +514,14 @@ class EpubContent:
         return titles[0]
 
     @property
-    def authors(self) -> list[str]:
+    def authors(self) -> List[str]:
         """
         获取作者列表
         """
         return list(map(lambda x: x.text, self._get_creators()))
 
     @authors.setter
-    def authors(self, authors):
+    def authors(self, authors: List[str]) -> None:
         """
         设置作者列表
         """
@@ -505,7 +545,7 @@ class EpubContent:
         for creator_dom in creator_doms:
             parent_dom.remove(creator_dom)
 
-    def _get_creators(self):
+    def _get_creators(self) -> List[Element]:
         """
         获取metadata中的creator节点
         """
@@ -520,7 +560,7 @@ class EpubContent:
         self,
         new_filename: str,
         chapter_title: str = "New Chapter",
-    ):
+    ) -> Path:
         """
         复制spine列表最后一个文件，仅保留head等body外内容，body清空，
         新文件保存到同级目录，并自动添加到opf的manifest、spine和toc.ncx。
@@ -528,17 +568,21 @@ class EpubContent:
         # 自动获取spine列表最后一个文件的路径
         last_spine = self.spines[-1]
         template_spine_path = Path(last_spine["base_path"]) / last_spine["href"]
-        print(template_spine_path)
+        logger.debug(f"Template spine path: {template_spine_path}")
         # 1. 解析模板文件，清空body内容
         new_content = self._generate_blank_chapter_content(template_spine_path)
         # 2. 保存新文件到同级目录
         new_path = self._save_new_chapter_file(
             template_spine_path, new_filename, new_content
         )
+        logger.info(f"新章节已添加，路径为: {new_path}")
         # 3. 修改opf（manifest、spine）
-        new_id = self._add_to_opf(new_filename)
+        opf_dir = os.path.dirname(self._content_path)
+        rel_path = os.path.relpath(str(new_path), opf_dir)
+        logger.debug(f"OPF目录: {opf_dir}, 新章节相对路径: {rel_path}")
+        new_id = self._add_to_opf(rel_path)
         # 4. 修改toc.ncx，添加navPoint
-        self._add_to_ncx(new_filename, chapter_title)
+        self._add_to_ncx(rel_path, chapter_title)
         # 保存opf
         self.save_content()
         return new_path
@@ -569,14 +613,11 @@ class EpubContent:
             f.write(new_content)
         return new_path
 
-    def _add_to_opf(self, new_filename: str) -> str:
-        """
-        向opf的manifest和spine添加新章节
-        """
-        new_id = f"item_{new_filename.replace('.', '_')}"
+    def _add_to_opf(self, rel_path: str) -> str:
+        new_id = f"item_{rel_path.replace('.', '_')}"
         manifest = self._manifest
         item_elem = SubElement(manifest, "item")
-        item_elem.set("href", new_filename)
+        item_elem.set("href", rel_path)
         item_elem.set("id", new_id)
         item_elem.set("media-type", "application/xhtml+xml")
         spine = self._spine
@@ -584,10 +625,7 @@ class EpubContent:
         itemref_elem.set("idref", new_id)
         return new_id
 
-    def _add_to_ncx(self, new_filename: str, chapter_title: str):
-        """
-        向toc.ncx添加navPoint
-        """
+    def _add_to_ncx(self, rel_path: str, chapter_title: str) -> None:
         ncx_path = self.ncx_path
         if ncx_path and os.path.exists(ncx_path):
             ncx_tree = etree.parse(ncx_path)
@@ -603,8 +641,37 @@ class EpubContent:
                 text = SubElement(navLabel, "text")
                 text.text = chapter_title
                 content = SubElement(navPoint, "content")
-                content.set("src", new_filename)
+                content.set("src", rel_path)
                 ncx_tree.write(ncx_path, encoding="utf-8", pretty_print=True)
+
+    def write_chapter_body(
+        self, chapter_path: Path, footnote_map: Iterable[Tuple[int, str]]
+    ) -> None:
+        """
+        将footnote_map内容写入指定xhtml文件body，带锚点id
+        """
+        parser = etree.HTMLParser(recover=True)
+        tree = etree.parse(str(chapter_path), parser=parser)
+        root = tree.getroot()
+        body = root.find(".//body")
+        if body is not None:
+            # 清空body内容
+            body.clear()
+            # 添加h1标题
+            h1 = etree.Element("h1")
+            h1.text = "译文参考"
+            body.append(h1)
+            # 添加每条注脚内容
+            for id, a_content in footnote_map:
+                p = etree.Element("p")
+                a = etree.Element("a", id=f"llmnote-{id}", attrib={"class": "nounder"})
+                a.text = f"#{id} {a_content}"
+                p.append(a)
+                body.append(p)
+        # 保存回文件，保持xml声明
+        tree.write(
+            str(chapter_path), encoding="utf-8", xml_declaration=True, pretty_print=True
+        )
 
 
 # =========================
