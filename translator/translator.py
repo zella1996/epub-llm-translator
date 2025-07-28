@@ -109,7 +109,13 @@ def translate_epub_main(epub_path: str, output_path: str) -> None:
     for spine_path in epub_book.search_spine_paths():
         html_file = epub_book.read_spine_file(spine_path)
         root = html_file._root
-        for p in root.iter(P_TAG):
+        p_iter = root.iter(P_TAG)
+        first = True
+        for p in p_iter:
+            if first:
+                logger.debug(f"跳过章节第一段: {p.text}")
+                first = False
+                continue  # 跳过每个章节的第一段<p>
             footnote_id = process_paragraph(p, footnote_id, footnote_map)
         epub_book.write_spine_file(spine_path, html_file)
 

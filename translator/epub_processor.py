@@ -174,7 +174,9 @@ def _iter_text(parent: Element):
 # HTMLFile: 单个HTML/XHTML文件处理
 # =========================
 
-_FILE_HEAD_PATTERN = re.compile(r"^<\?xml.*?\?>\\s*<!DOCTYPE.*?>", re.DOTALL)
+_FILE_HEAD_PATTERN = re.compile(
+    r"^(?:<\?xml.*?\?>\s*)?(?:<!DOCTYPE.*?>\s*)?", re.DOTALL | re.IGNORECASE
+)
 _XMLNS_IN_TAG = re.compile(r"\{[^}]+\}")
 _BRACES = re.compile(r"(\{|\})")
 
@@ -212,19 +214,19 @@ class HTMLFile:
         # 解析文件头部
         match = re.match(_FILE_HEAD_PATTERN, file_content)
         self._head: str = match.group() if match else None
-        
+
         # 初始化实例变量
         self._root: Element = None
         self._xmlns: str | None = None
         self._texts_length: int | None = None
-        
+
         # 准备XML内容
         xml_content = (
             re.sub(_FILE_HEAD_PATTERN, "", to_xml(file_content))
             if match
             else file_content
         )
-        
+
         # 尝试解析XML/XHTML
         try:
             self._root = fromstring(xml_content.encode("utf-8"))
@@ -307,7 +309,7 @@ class HTMLFile:
                     element.text = ""
             file_content = tostring(root, encoding="unicode")
         if self._head is not None:
-            file_content = self._head + file_content
+            file_content = self._head.rstrip() + "\n" + file_content.lstrip()
         return file_content
 
 
