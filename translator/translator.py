@@ -6,118 +6,105 @@ from translator.llm_api import explain_sentence
 from translator.sentence_analyzer import nlp, overall_difficulty
 from lxml.etree import Element
 
-# 常量定义
+# ===== 常量定义 =====
 P_TAG = "p"
-FOOTNOTE_START_ID = 1
 DIFFICULTY_THRESHOLD = 45
 FOOTNOTE_FILE_NAME = "译文参考.xhtml"
 FOOTNOTE_TITLE = "译文参考"
-FOOTNOTE_ID_TEMPLATE = "llmnote-{id}"
 FOOTNOTE_ANCHOR_HREF_TEMPLATE = "译文参考.xhtml#llmnote-{id}"
 FOOTNOTE_ANCHOR_CLASS = "nounder"
+FOOTNOTE_ANCHOR_TEXT = "#"
 SENTENCE_END_PUNCT = {".", "!", "?", "。", "！", "？"}
 
 
-def process_sentence(
-    text: str, footnote_id: int, footnote_map: List[Tuple[int, str]]
-) -> Tuple[str, List[Element], int]:
+def process_sentence(text: str, footnote_id: int) -> Tuple[bool, str]:
     """
-    处理单个句子，返回（句子文本, [要插入的Element节点], 下一个footnote_id）。
+    处理单个句子，返回（是否需要注脚, 注脚内容）。
     """
-    elements = []
-
-    # 句子基本筛选
+    # 基本筛选
     if len(text) < 5 or text[-1] not in SENTENCE_END_PUNCT:
         logger.debug(f"跳过非句子: {text}")
-        return text, elements, footnote_id
-
-    if len([w for w in text.split() if w.isalpha()]) <= 3:
+        return False, ""
+    if sum(1 for w in text.split() if w.isalpha()) <= 3:
         logger.debug(f"跳过短句: {text}")
-        return text, elements, footnote_id
-
-    if all((c in SENTENCE_END_PUNCT or c.isspace()) for c in text):
+        return False, ""
+    if all(c in SENTENCE_END_PUNCT or c.isspace() for c in text):
         logger.debug(f"跳过重复标点: {text}")
-        return text, elements, footnote_id
+        return False, ""
 
     # 难度评分
     score = overall_difficulty(text)
     logger.info(f"难度评分: {score:.2f} - 句子: {text}\n")
 
-    # 需要添加注脚的句子
     if score > DIFFICULTY_THRESHOLD:
         # result = explain_sentence(text)
         result = "test" + str(footnote_id)
-        logger.info(f"解释结果: {result}")
-        a = Element(
-            "a",
-            href=FOOTNOTE_ANCHOR_HREF_TEMPLATE.format(id=footnote_id),
-            **{"class": FOOTNOTE_ANCHOR_CLASS},
-        )
-        a.text = "# "
-        elements.append(a)
-        footnote_map.append((footnote_id, result))
-        footnote_id += 1
-
-    return text, elements, footnote_id
+        return True, result
+    return False, ""
 
 
-def process_paragraph(p, footnote_id: int, footnote_map: List[Tuple[int, str]]) -> int:
+def extract_text_recursive(element) -> str:
     """
-    处理单个<p>节点，按句子插入注脚标签，返回更新后的footnote_id
+    递归提取element及其所有子节点的文本内容，拼接为完整字符串。
     """
-    if not p.text:
-        return footnote_id
+    text = element.text or ""
+    for child in element:
+        text += extract_text_recursive(child)
+        text += child.tail or ""
+    return text
 
-    doc = nlp(p.text)
-    first = True
-    last_elem = p
-    p.text = None  # 清空原始文本
 
+def process_paragraph(p, note_id: int, para_notes_map: list) -> bool:
+    """
+    递归处理<p>及其所有子节点，能正确解析混合标签文本，段落末尾加#锚点，注脚合并。
+    返回是否有注脚。
+    """
+    full_text = extract_text_recursive(p).strip()
+    if not full_text:
+        return False
+
+    doc = nlp(full_text)
+    notes_in_para = []
     for sent in doc.sents:
         text = sent.text.strip()
-        sent_text, elements, footnote_id = process_sentence(
-            text, footnote_id, footnote_map
+        need_note, note_content = process_sentence(text, note_id)
+        if need_note:
+            notes_in_para.append(note_content)
+    if notes_in_para:
+        a = Element(
+            "a",
+            href=FOOTNOTE_ANCHOR_HREF_TEMPLATE.format(id=f"note-{note_id}"),
+            **{"class": FOOTNOTE_ANCHOR_CLASS},
         )
-        if first:
-            p.text = sent_text
-            last_elem = p
-            first = False
-        else:
-            if last_elem.tail is None:
-                last_elem.tail = sent_text
-            else:
-                last_elem.tail += sent_text
-        for elem in elements:
-            p.append(elem)
-            last_elem = elem
-    # 这里只处理了p.text，若p原本有子节点（如嵌套span），可根据需要扩展
-    return footnote_id
+        a.text = FOOTNOTE_ANCHOR_TEXT
+        p.append(a)
+        para_notes_map.append((note_id, notes_in_para))
+        return True
+    return False
 
 
 def translate_epub_main(epub_path: str, output_path: str) -> None:
     """
-    基于epub_processor实现的注脚添加主流程，按句子增量插入脚注标签。
+    主流程：递归处理所有段落，不跳过任何段，能正确解析混合标签文本。
+    注脚编号note_id为连续编号。
     """
     epub_path = Path(epub_path)
     output_path = Path(output_path)
     epub_book = EpubContent(epub_path)
 
-    footnote_id = FOOTNOTE_START_ID
-    footnote_map: List[Tuple[int, str]] = []  # (id, content)
+    para_notes_map = []  # (note_id, [内容1, 内容2, ...])
+    note_id = 1
 
-    # 遍历所有spine文件
     for spine_path in epub_book.search_spine_paths():
         html_file = epub_book.read_spine_file(spine_path)
         root = html_file._root
-        p_iter = root.iter(P_TAG)
-        first = True
-        for p in p_iter:
-            if first:
-                logger.debug(f"跳过章节第一段: {p.text}")
-                first = False
-                continue  # 跳过每个章节的第一段<p>
-            footnote_id = process_paragraph(p, footnote_id, footnote_map)
+        for p in root.iter(P_TAG):
+            if process_paragraph(p, note_id, para_notes_map):
+                note_id += 1
         epub_book.write_spine_file(spine_path, html_file)
+
+    # 合并注脚内容
+    footnote_map = [(nid, "; ".join(notes)) for nid, notes in para_notes_map]
 
     add_explanation_result_chapter(epub_book, footnote_map)
     epub_book.archive(output_path)
@@ -130,4 +117,4 @@ def add_explanation_result_chapter(
     生成译文参考章节，内容为所有注脚解释
     """
     new_path = book.add_blank_chapter(FOOTNOTE_FILE_NAME, FOOTNOTE_TITLE)
-    book.write_chapter_body(new_path, footnote_map)
+    book.write_chapter_body(new_path, FOOTNOTE_TITLE, footnote_map)

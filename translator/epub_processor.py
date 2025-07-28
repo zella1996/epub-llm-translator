@@ -654,7 +654,10 @@ class EpubContent:
                 ncx_tree.write(ncx_path, encoding="utf-8", pretty_print=True)
 
     def write_chapter_body(
-        self, chapter_path: Path, footnote_map: Iterable[Tuple[int, str]]
+        self,
+        chapter_path: Path,
+        chapter_title: str,
+        footnote_map: Iterable[Tuple[int, str]],
     ) -> None:
         """
         将footnote_map内容写入指定xhtml文件body，带锚点id
@@ -664,18 +667,30 @@ class EpubContent:
         root = tree.getroot()
         body = root.find(".//body")
         if body is not None:
-            # 清空body内容
             body.clear()
             # 添加h1标题
             h1 = etree.Element("h1")
-            h1.text = "译文参考"
+            h1.text = chapter_title
             body.append(h1)
             # 添加每条注脚内容
             for id, a_content in footnote_map:
                 p = etree.Element("p")
                 a = etree.Element("a", id=f"llmnote-{id}", attrib={"class": "nounder"})
-                a.text = f"#{id} {a_content}"
-                p.append(a)
+                # 优化分号处理逻辑
+                parts = [part.strip() for part in a_content.split(";")]
+                if len(parts) > 1:
+                    a.text = f"#{id}: {parts[0]};"
+                    p.append(a)
+                    for i, part in enumerate(parts[1:], 1):
+                        if part:
+                            p.append(etree.Element("br"))
+                            span = etree.Element("span")
+                            # 只有不是最后一个才加分号
+                            span.text = part + (";" if i < len(parts) else "")
+                            p.append(span)
+                else:
+                    a.text = f"#{id}: {a_content}"
+                    p.append(a)
                 body.append(p)
         # 保存回文件，保持xml声明
         tree.write(
