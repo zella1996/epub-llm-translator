@@ -24,6 +24,7 @@ from lxml.etree import (
     SubElement,
     fromstring,
 )
+from lxml.html import fromstring as html_fromstring
 from logs.logger import logger
 
 # =========================
@@ -208,23 +209,29 @@ class HTMLFile:
     """
 
     def __init__(self, file_content: str) -> None:
+        # 解析文件头部
         match = re.match(_FILE_HEAD_PATTERN, file_content)
-        xml_content = (
-            re.sub(_FILE_HEAD_PATTERN, "", to_xml(file_content))
-            if to_xml
-            else file_content
-        )
         self._head: str = match.group() if match else None
+        
+        # 初始化实例变量
         self._root: Element = None
         self._xmlns: str | None = None
         self._texts_length: int | None = None
-        from lxml.etree import fromstring as etree_fromstring
+        
+        # 准备XML内容
+        xml_content = (
+            re.sub(_FILE_HEAD_PATTERN, "", to_xml(file_content))
+            if match
+            else file_content
+        )
+        
+        # 尝试解析XML/XHTML
         try:
-            self._root = etree_fromstring(xml_content.encode("utf-8"))
+            self._root = fromstring(xml_content.encode("utf-8"))
             self._xmlns = self._extract_xmlns(self._root)
         except Exception as e1:
+            # 降级为HTML5解析
             try:
-                from lxml.html import fromstring as html_fromstring
                 self._root = html_fromstring(file_content.encode("utf-8"))
                 self._xmlns = None
                 logger.warning(f"[HTMLFile] XHTML解析失败，已降级为HTML5解析: {e1}")
