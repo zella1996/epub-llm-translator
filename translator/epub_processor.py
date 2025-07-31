@@ -26,6 +26,7 @@ from lxml.etree import (
 )
 from lxml.html import fromstring as html_fromstring
 from logs.logger import logger
+import shutil
 
 # =========================
 # 文本节点相关工具函数与类型
@@ -371,6 +372,13 @@ class EpubContent:
                     filename=file_path,
                     arcname=str(relative_path),
                 )
+        
+        # 打包成功后删除临时文件夹
+        try:
+            shutil.rmtree(self._temp_dir)
+            logger.info(f"已删除临时文件夹: {self._temp_dir}")
+        except Exception as e:
+            logger.warning(f"删除临时文件夹失败: {e}")
 
     @property
     def ncx_path(self) -> Optional[str]:
@@ -596,6 +604,75 @@ class EpubContent:
         self.save_content()
         return new_path
 
+    def append_blank_chapter(
+        self,
+        spine: dict,
+        chapter_title: str = "New Chapter",
+    ) -> Path:
+        """
+        复制指定的spine文件，仅保留head等body外内容，body清空，
+        新文件保存到同级目录，文件名为原文件名添加"_ext"后缀，
+        并自动添加到opf的manifest、spine和toc.ncx。
+        新章节紧跟在指定的spine后面。
+        """
+        # 获取指定spine的文件路径
+        template_spine_path = Path(spine["base_path"]) / spine["href"]
+        logger.debug(f"Template spine path: {template_spine_path}")
+
+        # 生成新文件名（添加"_ext"后缀）
+        original_filename = Path(spine["href"]).stem
+        original_ext = Path(spine["href"]).suffix
+        new_filename = f"{original_filename}_ext{original_ext}"
+
+        # 1. 解析模板文件，清空body内容
+        new_content = self._generate_blank_chapter_content(template_spine_path)
+        # 2. 保存新文件到同级目录
+        new_path = self._save_new_chapter_file(
+            template_spine_path, new_filename, new_content
+        )
+        logger.info(f"新章节已添加，路径为: {new_path}")
+        # 3. 修改opf（manifest、spine）
+        opf_dir = os.path.dirname(self._content_path)
+        rel_path = os.path.relpath(str(new_path), opf_dir)
+        logger.debug(f"OPF目录: {opf_dir}, 新章节相对路径: {rel_path}")
+        new_id = self._add_to_opf_after_spine(rel_path, spine["id"])
+        # 4. 修改toc.ncx，添加navPoint
+        if chapter_title is None:
+            chapter_title = f"{original_filename} Extended"
+        self._add_to_ncx(rel_path, chapter_title)
+        # 保存opf
+        self.save_content()
+        return new_path
+
+    def _add_to_opf_after_spine(self, rel_path: str, after_spine_id: str) -> str:
+        """
+        在指定的spine后面添加新的item到opf的manifest和spine
+        """
+        new_id = f"item_{rel_path.replace('.', '_')}"
+        manifest = self._manifest
+        item_elem = SubElement(manifest, "item")
+        item_elem.set("href", rel_path)
+        item_elem.set("id", new_id)
+        item_elem.set("media-type", "application/xhtml+xml")
+
+        # 在spine中找到指定spine的位置，在其后插入新itemref
+        spine = self._spine
+        target_index = -1
+        for i, itemref in enumerate(spine):
+            if itemref.get("idref") == after_spine_id:
+                target_index = i
+                break
+
+        itemref_elem = SubElement(spine, "itemref")
+        itemref_elem.set("idref", new_id)
+
+        # 如果找到了目标spine，将新itemref移动到正确位置
+        if target_index != -1:
+            spine.remove(itemref_elem)
+            spine.insert(target_index + 1, itemref_elem)
+
+        return new_id
+
     def _generate_blank_chapter_content(self, template_spine_path: Path) -> str:
         """
         解析模板文件，清空body内容，返回新内容
@@ -658,9 +735,11 @@ class EpubContent:
         chapter_path: Path,
         chapter_title: str,
         footnote_map: Iterable[Tuple[int, str]],
+        split_char: str,
     ) -> None:
         """
-        将footnote_map内容写入指定xhtml文件body，带锚点id
+        将footnote_map内容写入指定html文件body，带锚点id
+        split_char: 用于分割注脚内容的分隔符，默认为分号
         """
         parser = etree.HTMLParser(recover=True)
         tree = etree.parse(str(chapter_path), parser=parser)
@@ -676,21 +755,15 @@ class EpubContent:
             for id, a_content in footnote_map:
                 p = etree.Element("p")
                 a = etree.Element("a", id=f"llmnote-{id}", attrib={"class": "nounder"})
-                # 优化分号处理逻辑
-                parts = [part.strip() for part in a_content.split(";")]
-                if len(parts) > 1:
-                    a.text = f"#{id}: {parts[0]};"
-                    p.append(a)
-                    for i, part in enumerate(parts[1:], 1):
-                        if part:
-                            p.append(etree.Element("br"))
-                            span = etree.Element("span")
-                            # 只有不是最后一个才加分号
-                            span.text = part + (";" if i < len(parts) else "")
-                            p.append(span)
-                else:
-                    a.text = f"#{id}: {a_content}"
-                    p.append(a)
+                a.text = f"#{id}: "
+                p.append(a)
+                parts = [part.strip() for part in a_content.split(split_char)]
+                for part in parts:
+                    if part:
+                        p.append(etree.Element("br"))
+                        span = etree.Element("span")
+                        span.text = part
+                        p.append(span)
                 body.append(p)
         # 保存回文件，保持xml声明
         tree.write(
