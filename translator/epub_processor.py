@@ -771,15 +771,16 @@ class EpubContent:
                 h3.text = f"#{id}:"
                 body.append(h3)
                 
-                # 创建p标签容器
-                p = etree.Element("p")
-                
                 for text, note in text_note_pairs:
-                    # 使用span元素包装text
+                    # 创建original-text的p标签
+                    text_p = etree.Element("p")
                     text_span = etree.Element("span", attrib={"class": "original-text"})
                     text_span.text = text
+                    text_p.append(text_span)
+                    body.append(text_p)
                     
-                    # 创建note的span容器
+                    # 创建explanation的p标签
+                    note_p = etree.Element("p")
                     note_span = etree.Element("span", attrib={"class": "explanation"})
                     
                     # 解析note内容，按"分析："、"整体翻译："、"单词解释："分别创建span
@@ -824,12 +825,8 @@ class EpubContent:
                         # 如果没有找到特定格式，保持原有内容
                         note_span.text = note
                     
-                    p.append(text_span)
-                    p.append(etree.Element("br"))
-                    p.append(note_span)
-                    p.append(etree.Element("br"))
-                    p.append(etree.Element("br"))
-                body.append(p)
+                    note_p.append(note_span)
+                    body.append(note_p)
         # 保存回文件，保持xml声明
         tree.write(
             str(chapter_path), encoding="utf-8", xml_declaration=True, pretty_print=True

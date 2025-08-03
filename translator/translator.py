@@ -2,10 +2,11 @@ from pathlib import Path
 from typing import Tuple
 from logs.logger import logger
 from translator.epub_processor import EpubContent
-from translator.llm_api import LLMTranslator
+from translator.llm_api import LLMTranslator, ModelType
 from translator.sentence_analyzer import nlp, overall_difficulty
 from lxml.etree import Element
 import re
+import time
 
 # ===== 全局变量与常量定义 =====
 # 全局LLM翻译器实例，只初始化一次
@@ -58,9 +59,7 @@ def extract_text_recursive(element) -> str:
     return text
 
 
-def process_paragraph(
-    p, note_id: int, para_notes_map: list, chapter_name: str
-) -> bool:
+def process_paragraph(p, note_id: int, para_notes_map: list, chapter_name: str) -> bool:
     """
     递归处理<p>及其所有子节点，能正确解析混合标签文本，段落末尾加#锚点，注脚合并。
     返回是否有注脚。
@@ -108,6 +107,7 @@ def translate_epub_main(
     output_path: str,
     filename_pattern: str = None,
     book_name: str = None,
+    model: ModelType = ModelType.QWEN3_14B,
 ) -> None:
     """
     主流程：递归处理所有段落，不跳过任何段，能正确解析混合标签文本。
@@ -118,7 +118,12 @@ def translate_epub_main(
         output_path: 输出文件路径
         filename_pattern: 可选的正则表达式，仅处理匹配的文件名（不包括后缀）
         book_name: 可选的书名，如果不提供则从epub文件中读取
+        model: 使用的模型名称，默认为qwen3:14b
     """
+    # 记录整体开始时间
+    total_start_time = time.time()
+    logger.info(f"开始处理EPUB文件: {epub_path}")
+
     epub_path = Path(epub_path)
     output_path = Path(output_path)
     epub_book = EpubContent(epub_path)
@@ -135,13 +140,22 @@ def translate_epub_main(
     # 初始化全局LLM翻译器（只初始化一次）
     global _llm_translator
     if _llm_translator is None:
-        _llm_translator = LLMTranslator(book_name)
+        _llm_translator = LLMTranslator(book_name, model)
 
     # 获取所有spine信息，用于创建扩展章节
     spines = epub_book.spines
     spine_index = 0
 
+    # 统计信息
+    total_spines = 0
+    processed_spines = 0
+    total_notes = 0
+
     for spine_path in epub_book.search_spine_paths():
+        total_spines += 1
+        # 记录单个spine开始时间
+        spine_start_time = time.time()
+
         # 获取当前spine信息
         current_spine = spines[spine_index]
         spine_index += 1
@@ -152,7 +166,7 @@ def translate_epub_main(
             logger.info(f"跳过不匹配的文件: {filename}")
             continue
 
-        logger.info(f"处理章节: {spine_path}")
+        logger.info(f"开始处理章节: {spine_path}")
 
         para_notes_map = []  # (note_id, [内容1, 内容2, ...])
         note_id = 1
@@ -160,13 +174,21 @@ def translate_epub_main(
         html_file = epub_book.read_spine_file(spine_path)
         root = html_file._root
         chapter_name = Path(current_spine["href"]).stem
+
+        # 记录段落处理开始时间
+        paragraph_start_time = time.time()
         for p in root.iter(P_TAG):
             if process_paragraph(p, note_id, para_notes_map, chapter_name):
                 note_id += 1
+        paragraph_time = time.time() - paragraph_start_time
+
         epub_book.write_spine_file(spine_path, html_file)
 
         # 只有当有脚注时才创建扩展章节
         if para_notes_map:
+            # 记录扩展章节创建开始时间
+            extended_start_time = time.time()
+
             # 为当前章节创建扩展章节
             extended_chapter_path = epub_book.append_blank_chapter(
                 current_spine, f"{chapter_name} 译文参考"
@@ -174,7 +196,8 @@ def translate_epub_main(
 
             # 将当前章节的脚注写入对应的扩展章节
             footnote_map = [
-                (nid, [(text, note) for text, note in notes]) for nid, notes in para_notes_map
+                (nid, [(text, note) for text, note in notes])
+                for nid, notes in para_notes_map
             ]
             epub_book.write_chapter_body(
                 extended_chapter_path,
@@ -182,5 +205,27 @@ def translate_epub_main(
                 footnote_map,
             )
 
+            extended_time = time.time() - extended_start_time
+            total_notes += len(para_notes_map)
+            logger.info(f"扩展章节创建完成，耗时: {extended_time:.2f}秒")
+
+        # 记录单个spine总耗时
+        spine_time = time.time() - spine_start_time
+        processed_spines += 1
+        logger.info(
+            f"章节处理完成: {spine_path}, 总耗时: {spine_time:.2f}秒, 段落处理耗时: {paragraph_time:.2f}秒, 注脚数量: {len(para_notes_map)}"
+        )
+
+    # 记录归档开始时间
+    archive_start_time = time.time()
     epub_book.archive(output_path)
-    logger.info(f"处理完毕")
+    archive_time = time.time() - archive_start_time
+
+    # 记录整体总耗时
+    total_time = time.time() - total_start_time
+    logger.info(
+        f"EPUB处理完毕 - 总耗时: {total_time:.2f}秒, 归档耗时: {archive_time:.2f}秒"
+    )
+    logger.info(
+        f"统计信息 - 总章节数: {total_spines}, 处理章节数: {processed_spines}, 总注脚数: {total_notes}"
+    )
