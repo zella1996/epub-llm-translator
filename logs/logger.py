@@ -11,7 +11,7 @@ with open(log_file, "w", encoding="utf-8"):
     pass
 
 logger = logging.getLogger("translate_logger")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 file_handler = logging.FileHandler(log_file, encoding="utf-8")
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 file_handler.setFormatter(formatter)

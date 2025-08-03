@@ -53,7 +53,7 @@ _IGNORE_TAGS = (
     "img",
     "script",
     "metadata",
-    "{http://www.w3.org/1998/Math/MathML}math",  # TODO: 公式是正文，也要读进去，暂时忽略避免扰乱得了。
+    "{http://www.w3.org/1998/Math/MathML}math",  # 暂时忽略数学公式
 )
 
 # 认为是文本叶子的标签
@@ -119,7 +119,6 @@ def append_texts(root: Element, texts: Iterable[str | Iterable[str] | None]):
         if text is None:
             continue
         if not isinstance(text, str):
-            # TODO: 实现分割文本的写入
             text = "".join(text)
         if position == TextPosition.WHOLE_DOM:
             if parent is not None:
@@ -599,7 +598,7 @@ class EpubContent:
         logger.debug(f"OPF目录: {opf_dir}, 新章节相对路径: {rel_path}")
         new_id = self._add_to_opf(rel_path)
         # 4. 修改toc.ncx，添加navPoint
-        self._add_to_ncx(rel_path, chapter_title)
+        self._add_to_ncx(rel_path, chapter_title, last_spine["id"])
         # 保存opf
         self.save_content()
         return new_path
@@ -637,9 +636,7 @@ class EpubContent:
         logger.debug(f"OPF目录: {opf_dir}, 新章节相对路径: {rel_path}")
         new_id = self._add_to_opf_after_spine(rel_path, spine["id"])
         # 4. 修改toc.ncx，添加navPoint
-        if chapter_title is None:
-            chapter_title = f"{original_filename} Extended"
-        self._add_to_ncx(rel_path, chapter_title)
+        self._add_to_ncx(rel_path, chapter_title, spine["id"])
         # 保存opf
         self.save_content()
         return new_path
@@ -711,7 +708,7 @@ class EpubContent:
         itemref_elem.set("idref", new_id)
         return new_id
 
-    def _add_to_ncx(self, rel_path: str, chapter_title: str) -> None:
+    def _add_to_ncx(self, rel_path: str, chapter_title: str, after_spine_id: str = None) -> None:
         ncx_path = self.ncx_path
         if ncx_path and os.path.exists(ncx_path):
             ncx_tree = etree.parse(ncx_path)
@@ -728,18 +725,34 @@ class EpubContent:
                 text.text = chapter_title
                 content = SubElement(navPoint, "content")
                 content.set("src", rel_path)
+                
+                # 如果指定了after_spine_id，将新导航点移动到正确位置
+                if after_spine_id:
+                    target_index = -1
+                    for i, existing_navpoint in enumerate(navMap):
+                        # 查找对应的spine导航点
+                        content_elem = existing_navpoint.find(".//{*}content")
+                        if content_elem is not None:
+                            src = content_elem.get("src")
+                            if src and after_spine_id in src:
+                                target_index = i
+                                break
+                    
+                    # 如果找到了目标位置，将新导航点移动到正确位置
+                    if target_index != -1:
+                        navMap.remove(navPoint)
+                        navMap.insert(target_index + 1, navPoint)
+                
                 ncx_tree.write(ncx_path, encoding="utf-8", pretty_print=True)
 
     def write_chapter_body(
         self,
         chapter_path: Path,
         chapter_title: str,
-        footnote_map: Iterable[Tuple[int, str]],
-        split_char: str,
+        footnote_map: Iterable[Tuple[int, List[Tuple[str, str]]]],
     ) -> None:
         """
         将footnote_map内容写入指定html文件body，带锚点id
-        split_char: 用于分割注脚内容的分隔符，默认为分号
         """
         parser = etree.HTMLParser(recover=True)
         tree = etree.parse(str(chapter_path), parser=parser)
@@ -752,18 +765,70 @@ class EpubContent:
             h1.text = chapter_title
             body.append(h1)
             # 添加每条注脚内容
-            for id, a_content in footnote_map:
+            for id, text_note_pairs in footnote_map:
+                # 创建h3标题，直接设置id属性
+                h3 = etree.Element("h3", id=f"llmnote-{id}")
+                h3.text = f"#{id}:"
+                body.append(h3)
+                
+                # 创建p标签容器
                 p = etree.Element("p")
-                a = etree.Element("a", id=f"llmnote-{id}", attrib={"class": "nounder"})
-                a.text = f"#{id}: "
-                p.append(a)
-                parts = [part.strip() for part in a_content.split(split_char)]
-                for part in parts:
-                    if part:
-                        p.append(etree.Element("br"))
-                        span = etree.Element("span")
-                        span.text = part
-                        p.append(span)
+                
+                for text, note in text_note_pairs:
+                    # 使用span元素包装text
+                    text_span = etree.Element("span", attrib={"class": "original-text"})
+                    text_span.text = text
+                    
+                    # 创建note的span容器
+                    note_span = etree.Element("span", attrib={"class": "explanation"})
+                    
+                    # 解析note内容，按"分析："、"整体翻译："、"单词解释："分别创建span
+                    if "分析：" in note:
+                        analysis_start = note.find("分析：")
+                        translation_start = note.find("整体翻译：")
+                        word_explanation_start = note.find("单词解释：")
+                        
+                        # 提取分析部分
+                        if translation_start != -1:
+                            analysis_text = note[analysis_start + 3:translation_start].strip()
+                        else:
+                            analysis_text = note[analysis_start + 3:].strip()
+                        
+                        if analysis_text:
+                            analysis_span = etree.Element("span", attrib={"class": "analysis-section"})
+                            analysis_span.text = f"分析：{analysis_text}"
+                            note_span.append(analysis_span)
+                            note_span.append(etree.Element("br"))
+                        
+                        # 提取整体翻译部分
+                        if translation_start != -1:
+                            if word_explanation_start != -1:
+                                translation_text = note[translation_start + 5:word_explanation_start].strip()
+                            else:
+                                translation_text = note[translation_start + 5:].strip()
+                            
+                            if translation_text:
+                                translation_span = etree.Element("span", attrib={"class": "translation-section"})
+                                translation_span.text = f"整体翻译：{translation_text}"
+                                note_span.append(translation_span)
+                                note_span.append(etree.Element("br"))
+                        
+                        # 提取单词解释部分
+                        if word_explanation_start != -1:
+                            word_explanation_text = note[word_explanation_start + 5:].strip()
+                            if word_explanation_text:
+                                word_span = etree.Element("span", attrib={"class": "word-explanation-section"})
+                                word_span.text = f"单词解释：{word_explanation_text}"
+                                note_span.append(word_span)
+                    else:
+                        # 如果没有找到特定格式，保持原有内容
+                        note_span.text = note
+                    
+                    p.append(text_span)
+                    p.append(etree.Element("br"))
+                    p.append(note_span)
+                    p.append(etree.Element("br"))
+                    p.append(etree.Element("br"))
                 body.append(p)
         # 保存回文件，保持xml声明
         tree.write(

@@ -1,0 +1,5 @@
+lxml>=4.9.0
+spacy>=3.5.0
+wordfreq>=2.0.0
+textstat>=0.7.0
+ollama>=0.1.0
