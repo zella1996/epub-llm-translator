@@ -1,0 +1,7 @@
+{
+  "paragraph": "He gave up.",
+  "mode": "selection",
+  "expected_aids": [
+    {"scope": "phrase", "sentence_indices": [1], "quote": "gave up"}
+  ]
+}

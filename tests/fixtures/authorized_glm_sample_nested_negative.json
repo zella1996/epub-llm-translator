@@ -1,0 +1,7 @@
+{
+  "paragraph": "He did not say that she had left.",
+  "mode": "selection",
+  "expected_aids": [
+    {"scope": "sentence", "sentence_indices": [1]}
+  ]
+}

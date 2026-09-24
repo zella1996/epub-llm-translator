@@ -1,0 +1,7 @@
+{
+  "paragraph": "Mara put the letter in the drawer. She locked it.",
+  "mode": "selection",
+  "expected_aids": [
+    {"scope": "paragraph", "sentence_indices": [1, 2]}
+  ]
+}

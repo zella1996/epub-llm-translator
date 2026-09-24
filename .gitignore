@@ -1,0 +1,36 @@
+# Personal books and generated reading artifacts
+*.epub
+*.azw3
+.japanese-test-books
+!tests/fixtures/japanese-epub2.epub
+!tests/fixtures/japanese-epub3.epub
+
+# Local model/cache state
+.epub-llm-translator
+secrets.properties
+
+# Private benchmark corpora
+benchmarks/sense_and_sensibility_*.json
+
+# Personal Codex skills (installed locally, not part of the project)
+skills
+
+# Machine-local connection, environment, and private acceptance runbooks
+PROJECT_LOCAL.md
+PC_REMOTE_LOCAL.md
+MAC_GATEWAY_LOCAL.md
+Mac_to_WinPC_SSH_Guide.md
+REMOTE_PC_ENV_STATUS.md
+remote_pc_env_setup.md
+
+# Python local artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# macOS metadata
+.DS_Store

@@ -1,0 +1,32 @@
+[
+  {
+    "id": "short-idiom",
+    "input": {"paragraph": "He gave up.", "expected_aids": [{"scope": "phrase", "sentence_indices": [1], "quote": "gave up"}]},
+    "response": {"sentences": [{"index": 1, "translation": "他放弃了。", "difficulty": "fluent"}], "aids": [{"scope": "phrase", "sentence_indices": [1], "quote": "gave up", "text": "放弃，不再继续尝试。"}]}
+  },
+  {
+    "id": "long-insertion",
+    "input": {"paragraph": "The letter, which he had left unopened on the table while he searched every room for the key that his sister had borrowed, contained the answer.", "expected_aids": [{"scope": "sentence", "sentence_indices": [1]}]},
+    "response": {"sentences": [{"index": 1, "translation": "那封信里有答案；他曾把它原封未动地放在桌上，自己则在每个房间里寻找他的姐妹借走的钥匙。", "difficulty": "effortful"}], "aids": [{"scope": "sentence", "sentence_indices": [1], "text": "信里有答案；中间的插入内容交代信被搁置时他在做什么。", "show_translation": true}]}
+  },
+  {
+    "id": "negative-condition",
+    "input": {"paragraph": "Unless she called, he would not leave.", "expected_aids": [{"scope": "sentence", "sentence_indices": [1]}]},
+    "response": {"sentences": [{"index": 1, "translation": "除非她打来电话，否则他不会离开。", "difficulty": "effortful"}], "aids": [{"scope": "sentence", "sentence_indices": [1], "text": "她不打电话，他就不走；这并未保证她打来电话后他一定走。"}]}
+  },
+  {
+    "id": "tone",
+    "input": {"paragraph": "How very generous of you to leave me all the work!", "expected_aids": [{"scope": "sentence", "sentence_indices": [1]}]},
+    "response": {"sentences": [{"index": 1, "translation": "把所有工作都留给我，你可真够慷慨的！", "difficulty": "effortful"}], "aids": [{"scope": "sentence", "sentence_indices": [1], "text": "这里的慷慨带有反讽，抱怨对方把工作全推给自己。"}]}
+  },
+  {
+    "id": "cross-sentence-reference",
+    "input": {"paragraph": "Mara put the letter in the drawer. She locked it.", "expected_aids": [{"scope": "paragraph", "sentence_indices": [1, 2]}]},
+    "response": {"sentences": [{"index": 1, "translation": "Mara 把信放进抽屉。", "difficulty": "fluent"}, {"index": 2, "translation": "她把它锁上了。", "difficulty": "fluent"}], "aids": [{"scope": "paragraph", "sentence_indices": [1, 2], "text": "She 承接 Mara；根据放入后锁上的动作，it 指抽屉。"}]}
+  },
+  {
+    "id": "simple-no-aid",
+    "input": {"paragraph": "The sun rose.", "expected_aids": []},
+    "response": {"sentences": [{"index": 1, "translation": "太阳升起来了。", "difficulty": "fluent"}], "aids": []}
+  }
+]

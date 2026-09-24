@@ -1,0 +1,7 @@
+{
+  "paragraph": "The door was open. Yet nobody entered.",
+  "mode": "selection",
+  "expected_aids": [
+    {"scope": "paragraph", "sentence_indices": [1, 2]}
+  ]
+}

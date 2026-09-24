@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "epub-llm-translator"
+version = "0.1.0"
+description = "Create Kindle-friendly Chinese learning notes for English EPUB books."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["lxml>=4.9.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+syntax = ["spacy>=3.8,<3.9", "click>=8.1"]
+stanza = ["stanza>=1.14,<1.15"]
+
+[project.scripts]
+epub-llm-translator = "translator.cli:main"
+
+[tool.setuptools]
+packages = ["translator", "scripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "calibre: optional Calibre EPUB-to-AZW3 integration test",
+  "epubcheck: optional real EPUBCheck integration test",
+  "real_epub: optional public-domain real EPUB integration test",
+  "http_integration: optional localhost OpenAI-compatible HTTP integration test",
+]

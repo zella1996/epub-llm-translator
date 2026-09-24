@@ -1,0 +1,7 @@
+{
+  "paragraph": "Unless she called, he would not leave.",
+  "mode": "selection",
+  "expected_aids": [
+    {"scope": "sentence", "sentence_indices": [1]}
+  ]
+}

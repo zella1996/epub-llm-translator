@@ -1,0 +1,7 @@
+{
+  "paragraph": "How very generous of you to leave me all the work!",
+  "mode": "selection",
+  "expected_aids": [
+    {"scope": "sentence", "sentence_indices": [1]}
+  ]
+}

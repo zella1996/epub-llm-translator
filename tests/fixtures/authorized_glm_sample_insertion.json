@@ -1,0 +1,7 @@
+{
+  "paragraph": "The letter, which he had left unopened on the table while he searched every room for the key that his sister had borrowed, contained the answer.",
+  "mode": "selection",
+  "expected_aids": [
+    {"scope": "sentence", "sentence_indices": [1]}
+  ]
+}
